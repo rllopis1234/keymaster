@@ -139,3 +139,101 @@ def test_merch_spend_per_attendee_computes_ratio():
 
 def test_merch_spend_per_attendee_none_when_missing_revenue():
     assert metrics.merch_spend_per_attendee(None, 1000) is None
+
+
+# ---------------- confidence scores ----------------
+
+def test_score_demand_none_when_no_data():
+    assert metrics.score_demand({})["score"] is None
+    assert metrics.score_demand(None)["score"] is None
+
+
+def test_score_demand_averages_available_sub_scores():
+    result = metrics.score_demand({"monthly_listeners": 850_000, "growth_6mo_pct": 8})
+    assert result["score"] == 70.0  # (80 + 60) / 2
+    assert len(result["breakdown"]) == 4  # all 4 metrics listed even when 2 are missing
+
+
+def test_score_demand_top_band():
+    result = metrics.score_demand({"monthly_listeners": 5_000_000})
+    sub_score = next(b["sub_score"] for b in result["breakdown"] if b["label"] == "Monthly listeners")
+    assert sub_score == 100
+
+
+def test_score_marketing_none_when_no_data():
+    assert metrics.score_marketing({})["score"] is None
+
+
+def test_score_marketing_uses_only_platforms_with_data():
+    result = metrics.score_marketing({"instagram_followers": 500_000, "instagram_engagement_pct": 5})
+    assert result["score"] == 80.0  # (80 + 80) / 2 - followers band is <=1M, engagement band is <=8%
+    assert len([b for b in result["breakdown"] if "TikTok" in b["label"]]) == 2  # still listed, just null sub-scores
+
+
+def test_score_financial_matches_worked_example():
+    revenue_info = {"estimated_revenue": 63960.0}
+    expense_info = {"total_expenses": 49000.0}
+    performance = {"budget": 49000.0}
+    financial_details = {
+        "artist_guarantee": 20000, "venue_rental": 8000, "production_cost": 6000,
+        "marketing_cost": 5000, "security_cost": 3000, "insurance_cost": 2000,
+        "travel_cost": 2500, "hotels_cost": 1500, "crew_cost": 1000, "taxes_cost": 0,
+    }
+    result = metrics.score_financial(revenue_info, expense_info, performance, financial_details)
+    profit_entry = next(b for b in result["breakdown"] if b["label"] == "Profit ($)")
+    roi_entry = next(b for b in result["breakdown"] if b["label"] == "ROI (%)")
+    assert profit_entry["raw_value"] == 14960.0
+    assert roi_entry["raw_value"] == 30.5
+    assert result["score"] == 80
+    assert result["basis"] == "detailed financial breakdown"
+
+
+def test_score_financial_falls_back_without_detail():
+    revenue_info = {"estimated_revenue": 60000.0}
+    expense_info = {"total_expenses": 40000.0}
+    performance = {"budget": 40000.0}
+    result = metrics.score_financial(revenue_info, expense_info, performance, None)
+    assert result["basis"] == "simple budget-based estimate"
+    assert result["score"] is not None
+
+
+def test_score_risk_none_when_no_data():
+    assert metrics.score_risk(None, None)["score"] is None
+    assert metrics.score_risk({}, {})["score"] is None
+
+
+def test_score_risk_accumulates_penalty_points():
+    market_competition = {"other_concerts_count": 6, "weather_season_risk": "high"}
+    touring_history = {"no_shows_count": 2, "venue_size_progression": "declining"}
+    result = metrics.score_risk(market_competition, touring_history)
+    # 30 (6 concerts) + 30 (high weather) + 20 (no-shows) + 20 (declining) = 100
+    assert result["score"] == 100
+
+
+def test_score_risk_capped_at_100():
+    market_competition = {
+        "other_concerts_count": 10, "sports_events_count": 10, "festivals_count": 10,
+        "local_events_count": 10, "weather_season_risk": "high",
+        "major_holiday_conflict": True, "college_schedule_conflict": True, "school_break_overlap": True,
+    }
+    touring_history = {"no_shows_count": 5, "venue_size_progression": "declining",
+                        "sold_out_similar_venues": False, "average_attendance_pct": 40}
+    result = metrics.score_risk(market_competition, touring_history)
+    assert result["score"] == 100
+
+
+def test_score_overall_renormalizes_across_available_categories():
+    demand = {"score": 80}
+    marketing = {"score": None}  # missing
+    financial = {"score": 60}
+    risk = {"score": 20}
+    result = metrics.score_overall(demand, marketing, financial, risk)
+    # weights renormalized across Demand(.25) + Financial(.30) + Risk-inverted(.25) = .80 total
+    expected = round((80 * 0.25 + 60 * 0.30 + 80 * 0.25) / 0.80, 1)
+    assert result["score"] == expected
+
+
+def test_score_overall_none_when_nothing_available():
+    empty = {"score": None}
+    result = metrics.score_overall(empty, empty, empty, empty)
+    assert result["score"] is None

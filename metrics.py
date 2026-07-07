@@ -190,3 +190,248 @@ def rank_similar_talent(domain: str, exclude_name: str, target_capacity: int,
 
     ranked.sort(key=lambda s: (not s["genre_match"], s["capacity_delta"]))
     return ranked[:limit]
+
+
+# ============================================================
+# Confidence scores (Demand, Marketing, Financial, Risk, Overall)
+#
+# Every score function returns {"score": float|None, "breakdown": [...]}.
+# `score` is None when there isn't enough entered data to say anything
+# meaningful - callers should show "not enough data" rather than a
+# misleading number. Banding thresholds below are deliberately named
+# constants: they're reasonable defaults, not objective facts, and are
+# meant to be tuned as real booking outcomes accumulate.
+# ============================================================
+
+def _band_score(value: Optional[float], bands: list[tuple[float, int]]) -> Optional[int]:
+    """bands: ascending list of (upper_bound, score). Returns the score for
+    the first band whose upper_bound >= value, or the last band's score if
+    value exceeds every bound. None in, None out."""
+    if value is None:
+        return None
+    for upper_bound, score in bands:
+        if value <= upper_bound:
+            return score
+    return bands[-1][1]
+
+
+MONTHLY_LISTENERS_BANDS = [(10_000, 20), (100_000, 40), (500_000, 60), (2_000_000, 80), (float("inf"), 100)]
+CITY_LISTENERS_BANDS = [(1_000, 20), (10_000, 40), (50_000, 60), (200_000, 80), (float("inf"), 100)]
+PLAYLIST_REACH_BANDS = [(50_000, 20), (500_000, 40), (2_000_000, 60), (10_000_000, 80), (float("inf"), 100)]
+GROWTH_6MO_BANDS = [(0, 20), (5, 40), (15, 60), (30, 80), (float("inf"), 100)]  # percent
+
+INSTAGRAM_FOLLOWERS_BANDS = [(10_000, 20), (50_000, 40), (200_000, 60), (1_000_000, 80), (float("inf"), 100)]
+INSTAGRAM_ENGAGEMENT_BANDS = [(1, 20), (2, 40), (4, 60), (8, 80), (float("inf"), 100)]  # percent
+TIKTOK_FOLLOWERS_BANDS = [(10_000, 20), (50_000, 40), (200_000, 60), (1_000_000, 80), (float("inf"), 100)]
+TIKTOK_VIRAL_RATE_BANDS = [(1, 20), (3, 40), (6, 60), (12, 80), (float("inf"), 100)]  # percent
+YOUTUBE_SUBSCRIBERS_BANDS = [(10_000, 20), (50_000, 40), (200_000, 60), (1_000_000, 80), (float("inf"), 100)]
+YOUTUBE_VIEWS_RATIO_BANDS = [(5, 20), (15, 40), (30, 60), (60, 80), (float("inf"), 100)]  # avg_views/subscribers, percent
+
+ROI_BANDS = [(0, 20), (10, 40), (20, 60), (35, 80), (float("inf"), 100)]  # percent
+
+COMPETITION_COUNT_BANDS = [(0, 0), (2, 10), (5, 20), (float("inf"), 30)]
+
+
+def _composite_score(items: list[tuple[str, Optional[float], list, str]]) -> dict:
+    breakdown = []
+    sub_scores = []
+    for label, raw_value, bands, note in items:
+        sub_score = _band_score(raw_value, bands)
+        breakdown.append({"label": label, "raw_value": raw_value, "sub_score": sub_score, "note": note})
+        if sub_score is not None:
+            sub_scores.append(sub_score)
+    score = round(mean(sub_scores), 1) if sub_scores else None
+    return {"score": score, "breakdown": breakdown}
+
+
+def score_demand(audience: Optional[dict]) -> dict:
+    """Streaming/audience reach - not social media (see score_marketing)."""
+    audience = audience or {}
+    return _composite_score([
+        ("Monthly listeners", audience.get("monthly_listeners"), MONTHLY_LISTENERS_BANDS,
+         "Total monthly streaming listeners across platforms."),
+        ("Listeners in this city", audience.get("city_listeners"), CITY_LISTENERS_BANDS,
+         "Streaming listeners based in the booking's city."),
+        ("Playlist reach", audience.get("playlist_reach"), PLAYLIST_REACH_BANDS,
+         "Combined reach of playlists featuring this talent."),
+        ("Growth over last 6 months", audience.get("growth_6mo_pct"), GROWTH_6MO_BANDS,
+         "% growth in listeners/followers over the last 6 months."),
+    ])
+
+
+def score_marketing(audience: Optional[dict]) -> dict:
+    """Social media reach/engagement across Instagram, TikTok, YouTube."""
+    audience = audience or {}
+    breakdown = []
+    platform_scores = []
+
+    def platform(prefix: str, followers, followers_bands, engagement, engagement_bands,
+                 engagement_label: str, engagement_note: str, followers_note: str):
+        f_score = _band_score(followers, followers_bands)
+        e_score = _band_score(engagement, engagement_bands)
+        breakdown.append({"label": f"{prefix} followers", "raw_value": followers, "sub_score": f_score,
+                           "note": followers_note})
+        breakdown.append({"label": f"{prefix} {engagement_label}", "raw_value": engagement, "sub_score": e_score,
+                           "note": engagement_note})
+        sub = [s for s in (f_score, e_score) if s is not None]
+        if sub:
+            platform_scores.append(mean(sub))
+
+    platform("Instagram", audience.get("instagram_followers"), INSTAGRAM_FOLLOWERS_BANDS,
+              audience.get("instagram_engagement_pct"), INSTAGRAM_ENGAGEMENT_BANDS,
+              "engagement rate", "(likes + comments) ÷ followers.", "Instagram follower count.")
+    platform("TikTok", audience.get("tiktok_followers"), TIKTOK_FOLLOWERS_BANDS,
+              audience.get("tiktok_viral_rate_pct"), TIKTOK_VIRAL_RATE_BANDS,
+              "viral rate", "Share of videos that significantly outperform average views.",
+              "TikTok follower count.")
+
+    youtube_views_ratio = None
+    if audience.get("youtube_subscribers") and audience.get("youtube_avg_views") is not None:
+        youtube_views_ratio = (audience["youtube_avg_views"] / audience["youtube_subscribers"]) * 100
+    platform("YouTube", audience.get("youtube_subscribers"), YOUTUBE_SUBSCRIBERS_BANDS,
+              youtube_views_ratio, YOUTUBE_VIEWS_RATIO_BANDS,
+              "views-to-subscriber ratio", "Average views as a % of subscriber count.",
+              "YouTube subscriber count.")
+
+    score = round(mean(platform_scores), 1) if platform_scores else None
+    return {"score": score, "breakdown": breakdown}
+
+
+def score_financial(revenue_info: dict, expense_info: dict, performance: dict,
+                     financial_details: Optional[dict] = None) -> dict:
+    financial_details = financial_details or {}
+    expense_fields = [
+        "artist_guarantee", "venue_rental", "production_cost", "marketing_cost", "security_cost",
+        "insurance_cost", "travel_cost", "hotels_cost", "crew_cost", "taxes_cost",
+    ]
+    has_detail = any(financial_details.get(f) is not None for f in expense_fields)
+
+    if has_detail:
+        ticket_gross = revenue_info["estimated_revenue"]
+        food_pct = financial_details.get("food_pct") or 0
+        parking_pct = financial_details.get("parking_pct") or 0
+        detailed_revenue = (
+            ticket_gross
+            + (financial_details.get("vip_package_revenue") or 0)
+            + (financial_details.get("merch_revenue") or 0)
+            + (financial_details.get("sponsorship_revenue") or 0)
+            + ticket_gross * (food_pct / 100)
+            + ticket_gross * (parking_pct / 100)
+        )
+        detailed_expenses = sum(financial_details.get(f) or 0 for f in expense_fields)
+        profit = detailed_revenue - detailed_expenses
+        roi_pct = (profit / detailed_expenses * 100) if detailed_expenses else None
+        breakdown = [
+            {"label": "Detailed gross revenue ($)", "raw_value": round(detailed_revenue, 2), "sub_score": None,
+             "note": "Ticket gross + VIP + merch + sponsorship + food/parking share of gross."},
+            {"label": "Detailed expenses ($)", "raw_value": round(detailed_expenses, 2), "sub_score": None,
+             "note": "Sum of all entered expense line items."},
+            {"label": "Profit ($)", "raw_value": round(profit, 2), "sub_score": None,
+             "note": "Revenue minus expenses."},
+            {"label": "ROI (%)", "raw_value": round(roi_pct, 1) if roi_pct is not None else None,
+             "sub_score": _band_score(roi_pct, ROI_BANDS),
+             "note": "Profit ÷ expenses, based on the detailed financial breakdown."},
+        ]
+        basis = "detailed financial breakdown"
+    else:
+        budget = performance.get("budget") or 0
+        net_margin = revenue_info["estimated_revenue"] - expense_info["total_expenses"]
+        roi_pct = (net_margin / budget * 100) if budget else None
+        breakdown = [
+            {"label": "Estimated revenue ($)", "raw_value": round(revenue_info["estimated_revenue"], 2),
+             "sub_score": None, "note": "Target capacity × sell-through rate × ticket price."},
+            {"label": "Estimated expenses ($)", "raw_value": round(expense_info["total_expenses"], 2),
+             "sub_score": None, "note": "Budget × expense template percentages."},
+            {"label": "Net margin ($)", "raw_value": round(net_margin, 2), "sub_score": None,
+             "note": "Revenue minus expenses."},
+            {"label": "ROI-equivalent (%)", "raw_value": round(roi_pct, 1) if roi_pct is not None else None,
+             "sub_score": _band_score(roi_pct, ROI_BANDS),
+             "note": "Net margin ÷ budget - add a detailed financial breakdown for a more precise score."},
+        ]
+        basis = "simple budget-based estimate"
+
+    return {"score": _band_score(roi_pct, ROI_BANDS), "breakdown": breakdown, "basis": basis}
+
+
+def score_risk(market_competition: Optional[dict], touring_history: Optional[dict]) -> dict:
+    """0-100, lower is better - accumulates penalty points, capped at 100."""
+    market_competition = market_competition or {}
+    touring_history = touring_history or {}
+
+    competition_fields = [
+        "other_concerts_count", "sports_events_count", "festivals_count", "local_events_count",
+        "major_holiday_conflict", "college_schedule_conflict", "school_break_overlap", "weather_season_risk",
+    ]
+    touring_fields = [
+        "sold_out_similar_venues", "average_attendance_pct", "no_shows_count",
+        "repeat_cities", "festival_performance", "venue_size_progression",
+    ]
+    has_data = (
+        any(market_competition.get(f) is not None for f in competition_fields)
+        or any(touring_history.get(f) is not None for f in touring_fields)
+    )
+    if not has_data:
+        return {"score": None, "breakdown": []}
+
+    breakdown = []
+    risk_points = 0
+
+    for label, key, note in [
+        ("Other concerts nearby", "other_concerts_count", "Competing concerts within the market window."),
+        ("Sports events nearby", "sports_events_count", "Competing sports events."),
+        ("Festivals nearby", "festivals_count", "Competing festivals."),
+        ("Local events nearby", "local_events_count", "Other local events."),
+    ]:
+        count = market_competition.get(key)
+        points = _band_score(count, COMPETITION_COUNT_BANDS) or 0
+        risk_points += points
+        breakdown.append({"label": label, "raw_value": count, "sub_score": points, "note": note})
+
+    weather_risk = market_competition.get("weather_season_risk")
+    weather_points = {"low": 0, "medium": 15, "high": 30}.get(weather_risk, 0)
+    risk_points += weather_points
+    breakdown.append({"label": "Weather season risk", "raw_value": weather_risk, "sub_score": weather_points,
+                       "note": "Seasonal weather risk for the venue/date."})
+
+    for label, condition, points, note in [
+        ("Major holiday conflict", market_competition.get("major_holiday_conflict"), 15,
+         "Booking date conflicts with a major holiday."),
+        ("College schedule conflict", market_competition.get("college_schedule_conflict"), 10,
+         "Booking date conflicts with the local college calendar."),
+        ("School break overlap", market_competition.get("school_break_overlap"), 5,
+         "Booking date overlaps with school breaks."),
+        ("History of no-shows", (touring_history.get("no_shows_count") or 0) > 0, 20,
+         "Artist has a history of no-show/cancelled performances."),
+        ("Declining venue progression", touring_history.get("venue_size_progression") == "declining", 20,
+         "Venue sizes have been trending down over time."),
+        ("Hasn't sold out similar venues", touring_history.get("sold_out_similar_venues") is False, 15,
+         "Artist has not sold out comparable venues previously."),
+        ("Low average attendance", (touring_history.get("average_attendance_pct") or 100) < 70, 15,
+         "Average attendance below 70% of capacity historically."),
+    ]:
+        points = points if condition else 0
+        risk_points += points
+        breakdown.append({"label": label, "raw_value": bool(condition), "sub_score": points, "note": note})
+
+    return {"score": min(risk_points, 100), "breakdown": breakdown}
+
+
+def score_overall(demand: dict, marketing: dict, financial: dict, risk: dict) -> dict:
+    """Weighted composite - renormalized across whichever categories have data."""
+    components = [
+        ("Demand", demand.get("score"), 0.25),
+        ("Marketing", marketing.get("score"), 0.20),
+        ("Financial", financial.get("score"), 0.30),
+        ("Risk (inverted)", (100 - risk["score"]) if risk.get("score") is not None else None, 0.25),
+    ]
+    breakdown = [
+        {"label": label, "raw_value": value, "sub_score": value,
+         "note": f"Weight: {weight:.0%}" if value is not None else "Not enough data"}
+        for label, value, weight in components
+    ]
+    available = [(value, weight) for _, value, weight in components if value is not None]
+    if not available:
+        return {"score": None, "breakdown": breakdown}
+    total_weight = sum(w for _, w in available)
+    weighted_sum = sum(v * w for v, w in available)
+    return {"score": round(weighted_sum / total_weight, 1), "breakdown": breakdown}

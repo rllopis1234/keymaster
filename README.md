@@ -129,40 +129,78 @@ venues) where those keys are configured. Click a suggestion to fill the field.
 
 ### Demand & Market Intelligence
 
-A dedicated panel per booking covering the metrics agencies typically use to
-size demand before committing to a show. Three are computed automatically
-from data already on the booking:
+A panel per booking covering the metrics agencies typically use to size
+demand before committing to a show. Three are computed automatically from
+data already on the booking:
 
 - **Historical sell-through rate** — same value/source as the revenue estimate above.
 - **Venue fit score** — estimated attendance ÷ target capacity (ideal range: 85-95%).
 - **Marketing efficiency** — marketing spend ÷ estimated attendance ($/ticket).
 
-The rest depend on data the agency tracks per artist/market (social
-platforms, Google Trends, promoter history) that no connected API supplies,
-so they're entered manually per booking via the "Manually-entered demand
-metrics" form — fill in whichever you have, leave the rest blank:
+The rest depend on data no connected API supplies (Google Trends, promoter
+history, purchasing power), entered manually via the "Manually-entered
+demand metrics" form: search interest / SEO score, ticket conversion rate,
+audience purchasing power, VIP conversion rate, promoter reliability score,
+and fan sentiment score.
 
-local fan density, search interest index, social engagement rate, streaming
-popularity, ticket conversion rate, audience purchasing power, market
-competition index, VIP conversion rate, merchandise revenue (auto-converted
-to spend-per-attendee), promoter reliability score, fan sentiment score, and
-demand growth rate.
+Audience/social platform data (streaming reach, Instagram/TikTok/YouTube)
+has its own dedicated section — see Confidence scores below.
 
-All of the above math is DB-driven and fully testable without any network
-access — see `scripts/sanity_check.py` and `tests/`. Live API data (current
-Ticketmaster listings, Setlist.fm history, TMDB profile) is shown separately
-in the "Live external data" expander as supplementary context, and never
-silently overrides your historical/manual numbers except for the one
-documented Ticketmaster ticket-price fallback above.
+## Confidence scores
+
+Rather than a wall of raw numbers, every booking's dashboard leads with five
+scores (0-100; Risk is "lower is better"), each with a "More" popover
+explaining exactly what drove the number. All scoring logic lives in
+`metrics.py` (`score_demand`, `score_marketing`, `score_financial`,
+`score_risk`, `score_overall`) and is fully unit-tested without any network
+access. A score shows "Not enough data" instead of a misleading number when
+nothing relevant has been entered yet.
+
+**The banding thresholds below are deliberately named, documented constants
+in `metrics.py` — reasonable starting defaults, not objective facts. Tune
+them as real booking outcomes accumulate.**
+
+- **Demand score** — streaming/audience reach: monthly listeners, listeners
+  in this city, playlist reach, growth over the last 6 months. Entered via
+  "Audience & Social Media".
+- **Marketing score** — social platform reach/engagement: Instagram
+  (followers, engagement %), TikTok (followers, viral rate %), YouTube
+  (subscribers, views-to-subscriber ratio). Same "Audience & Social Media"
+  section as Demand — this is what separates "people already listen to this
+  artist" (Demand) from "this artist is easy to market to their audience"
+  (Marketing).
+- **Financial score** — based on ROI (profit ÷ expenses). Uses the optional
+  "Detailed financial breakdown" (VIP packages, merch, sponsorship, food/
+  parking as a % of ticket gross, plus line-item expenses: artist guarantee,
+  venue rental, production, marketing, security, insurance, travel, hotels,
+  crew, taxes) when filled in; otherwise falls back to net margin ÷ budget
+  from the simple model above, through the same ROI bands, so both paths
+  are directly comparable.
+- **Risk score (lower is better)** — starts at 0 and accumulates penalty
+  points from "Market competition" (competing concerts/sports/festivals/
+  local events nearby, holiday/college-schedule/school-break conflicts,
+  seasonal weather risk) and "Touring history" red flags (any no-shows,
+  declining venue-size progression, not selling out similar venues, average
+  attendance below 70% of capacity), capped at 100.
+- **Overall viability** — a weighted average of the four above (Demand 25%,
+  Marketing 20%, Financial 30%, Risk inverted 25%), renormalized across
+  whichever categories actually have data entered.
+
+New data-entry sections feeding these scores, each optional and independent:
+**Audience & Social Media** (streaming + Instagram/TikTok/YouTube stats),
+**Detailed financial breakdown** (the granular revenue/expense line items),
+**Touring history** (sold out similar venues? average attendance? no-shows?
+repeat cities? festival performance? venue size progression?), and **Market
+competition** (nearby events, holiday/college/weather conflicts).
 
 ## Exporting a booking to Excel
 
 Every booking's dashboard has a "Download booking report (.xlsx)" button
-that saves everything on that page — inputs (talent, venue, city, date,
-capacity, budget, notes) and outputs (revenue/expense estimates, venue fit
-score, marketing efficiency, demand metrics, similar-talent comparison,
-historical performance) — into a single spreadsheet with one sheet per
-section.
+that saves everything on that page into one spreadsheet: booking summary,
+the five confidence scores plus their full breakdowns, expense breakdown,
+demand metrics, audience & social media, financial details, touring
+history, market competition, similar-talent comparison, and historical
+performance — one sheet per section.
 
 ## Project layout
 

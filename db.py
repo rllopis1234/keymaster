@@ -82,32 +82,129 @@ SCHEMA_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS demand_metrics (
         id SERIAL PRIMARY KEY,
         performance_id INTEGER NOT NULL UNIQUE REFERENCES performances(id),
-        local_fan_density REAL,
         search_interest_index REAL,
-        social_engagement_rate REAL,
-        streaming_popularity REAL,
         ticket_conversion_rate REAL,
         audience_purchasing_power REAL,
-        market_competition_index INTEGER,
         vip_conversion_rate REAL,
-        merch_revenue_total REAL,
         promoter_reliability_score REAL,
         fan_sentiment_score REAL,
-        demand_growth_rate REAL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS audience_metrics (
+        id SERIAL PRIMARY KEY,
+        performance_id INTEGER NOT NULL UNIQUE REFERENCES performances(id),
+        monthly_listeners REAL,
+        city_listeners REAL,
+        playlist_reach REAL,
+        growth_6mo_pct REAL,
+        instagram_followers REAL,
+        instagram_avg_likes REAL,
+        instagram_avg_comments REAL,
+        instagram_engagement_pct REAL,
+        tiktok_followers REAL,
+        tiktok_avg_views REAL,
+        tiktok_viral_rate_pct REAL,
+        youtube_subscribers REAL,
+        youtube_avg_views REAL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS financial_details (
+        id SERIAL PRIMARY KEY,
+        performance_id INTEGER NOT NULL UNIQUE REFERENCES performances(id),
+        vip_package_revenue REAL,
+        merch_revenue REAL,
+        sponsorship_revenue REAL,
+        food_pct REAL,
+        parking_pct REAL,
+        artist_guarantee REAL,
+        venue_rental REAL,
+        production_cost REAL,
+        marketing_cost REAL,
+        security_cost REAL,
+        insurance_cost REAL,
+        travel_cost REAL,
+        hotels_cost REAL,
+        crew_cost REAL,
+        taxes_cost REAL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS touring_history (
+        id SERIAL PRIMARY KEY,
+        performance_id INTEGER NOT NULL UNIQUE REFERENCES performances(id),
+        sold_out_similar_venues BOOLEAN,
+        average_attendance_pct REAL,
+        no_shows_count INTEGER,
+        average_ticket_price REAL,
+        repeat_cities BOOLEAN,
+        festival_performance BOOLEAN,
+        venue_size_progression TEXT CHECK(venue_size_progression IN ('growing', 'stable', 'declining') OR venue_size_progression IS NULL),
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS market_competition (
+        id SERIAL PRIMARY KEY,
+        performance_id INTEGER NOT NULL UNIQUE REFERENCES performances(id),
+        other_concerts_count INTEGER,
+        sports_events_count INTEGER,
+        festivals_count INTEGER,
+        local_events_count INTEGER,
+        major_holiday_conflict BOOLEAN,
+        college_schedule_conflict BOOLEAN,
+        school_break_overlap BOOLEAN,
+        weather_season_risk TEXT CHECK(weather_season_risk IN ('low', 'medium', 'high') OR weather_season_risk IS NULL),
         updated_at TEXT NOT NULL
     )
     """,
 ]
 
+MIGRATION_STATEMENTS = [
+    """ALTER TABLE demand_metrics
+       DROP COLUMN IF EXISTS local_fan_density,
+       DROP COLUMN IF EXISTS social_engagement_rate,
+       DROP COLUMN IF EXISTS streaming_popularity,
+       DROP COLUMN IF EXISTS market_competition_index,
+       DROP COLUMN IF EXISTS merch_revenue_total,
+       DROP COLUMN IF EXISTS demand_growth_rate""",
+]
+
 ALL_TABLES = (
-    "talents, performances, historical_comps, expense_templates, api_cache, demand_metrics"
+    "talents, performances, historical_comps, expense_templates, api_cache, demand_metrics, "
+    "audience_metrics, financial_details, touring_history, market_competition"
 )
 
 DEMAND_METRIC_FIELDS = [
-    "local_fan_density", "search_interest_index", "social_engagement_rate",
-    "streaming_popularity", "ticket_conversion_rate", "audience_purchasing_power",
-    "market_competition_index", "vip_conversion_rate", "merch_revenue_total",
-    "promoter_reliability_score", "fan_sentiment_score", "demand_growth_rate",
+    "search_interest_index", "ticket_conversion_rate", "audience_purchasing_power",
+    "vip_conversion_rate", "promoter_reliability_score", "fan_sentiment_score",
+]
+
+AUDIENCE_METRIC_FIELDS = [
+    "monthly_listeners", "city_listeners", "playlist_reach", "growth_6mo_pct",
+    "instagram_followers", "instagram_avg_likes", "instagram_avg_comments", "instagram_engagement_pct",
+    "tiktok_followers", "tiktok_avg_views", "tiktok_viral_rate_pct",
+    "youtube_subscribers", "youtube_avg_views",
+]
+
+FINANCIAL_DETAIL_FIELDS = [
+    "vip_package_revenue", "merch_revenue", "sponsorship_revenue", "food_pct", "parking_pct",
+    "artist_guarantee", "venue_rental", "production_cost", "marketing_cost", "security_cost",
+    "insurance_cost", "travel_cost", "hotels_cost", "crew_cost", "taxes_cost",
+]
+
+TOURING_HISTORY_FIELDS = [
+    "sold_out_similar_venues", "average_attendance_pct", "no_shows_count", "average_ticket_price",
+    "repeat_cities", "festival_performance", "venue_size_progression",
+]
+
+MARKET_COMPETITION_FIELDS = [
+    "other_concerts_count", "sports_events_count", "festivals_count", "local_events_count",
+    "major_holiday_conflict", "college_schedule_conflict", "school_break_overlap", "weather_season_risk",
 ]
 
 
@@ -133,6 +230,8 @@ def init_db():
     with get_connection() as conn:
         cur = conn.cursor()
         for statement in SCHEMA_STATEMENTS:
+            cur.execute(statement)
+        for statement in MIGRATION_STATEMENTS:
             cur.execute(statement)
         cur.execute("SELECT id FROM expense_templates WHERE is_default = 1")
         existing_default = cur.fetchone()
@@ -417,21 +516,24 @@ def cache_set(source: str, cache_key: str, response: dict, ttl_seconds: int):
         )
 
 
-# ---------------- demand_metrics ----------------
+# ---------------- one-to-one performance detail tables ----------------
+# demand_metrics, audience_metrics, financial_details, touring_history, and
+# market_competition all follow the same shape: one optional row per
+# performance, arbitrary subset of nullable fields filled in over time.
 
-def get_demand_metrics(performance_id: int):
+def _get_one_to_one(table: str, performance_id: int):
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM demand_metrics WHERE performance_id = %s", (performance_id,))
+        cur.execute(f"SELECT * FROM {table} WHERE performance_id = %s", (performance_id,))
         return cur.fetchone()
 
 
-def upsert_demand_metrics(performance_id: int, **fields):
-    """fields may include any of DEMAND_METRIC_FIELDS; omitted ones are left
-    NULL on insert or untouched on update (only provided keys are written)."""
-    unknown = set(fields) - set(DEMAND_METRIC_FIELDS)
+def _upsert_one_to_one(table: str, valid_fields: list[str], performance_id: int, **fields):
+    """fields may include any of valid_fields; omitted ones are left NULL on
+    insert or untouched on update (only provided keys are written)."""
+    unknown = set(fields) - set(valid_fields)
     if unknown:
-        raise ValueError(f"Unknown demand metric field(s): {unknown}")
+        raise ValueError(f"Unknown field(s) for {table}: {unknown}")
 
     columns = list(fields.keys())
     values = [fields[c] for c in columns]
@@ -443,8 +545,48 @@ def upsert_demand_metrics(performance_id: int, **fields):
         insert_placeholders = ", ".join(["%s"] * len(insert_columns))
         update_clause = ", ".join(f"{c} = %s" for c in columns) + ", updated_at = %s"
         cur.execute(
-            f"""INSERT INTO demand_metrics ({", ".join(insert_columns)})
+            f"""INSERT INTO {table} ({", ".join(insert_columns)})
                 VALUES ({insert_placeholders})
                 ON CONFLICT (performance_id) DO UPDATE SET {update_clause}""",
             (performance_id, *values, now, *values, now),
         )
+
+
+def get_demand_metrics(performance_id: int):
+    return _get_one_to_one("demand_metrics", performance_id)
+
+
+def upsert_demand_metrics(performance_id: int, **fields):
+    _upsert_one_to_one("demand_metrics", DEMAND_METRIC_FIELDS, performance_id, **fields)
+
+
+def get_audience_metrics(performance_id: int):
+    return _get_one_to_one("audience_metrics", performance_id)
+
+
+def upsert_audience_metrics(performance_id: int, **fields):
+    _upsert_one_to_one("audience_metrics", AUDIENCE_METRIC_FIELDS, performance_id, **fields)
+
+
+def get_financial_details(performance_id: int):
+    return _get_one_to_one("financial_details", performance_id)
+
+
+def upsert_financial_details(performance_id: int, **fields):
+    _upsert_one_to_one("financial_details", FINANCIAL_DETAIL_FIELDS, performance_id, **fields)
+
+
+def get_touring_history(performance_id: int):
+    return _get_one_to_one("touring_history", performance_id)
+
+
+def upsert_touring_history(performance_id: int, **fields):
+    _upsert_one_to_one("touring_history", TOURING_HISTORY_FIELDS, performance_id, **fields)
+
+
+def get_market_competition(performance_id: int):
+    return _get_one_to_one("market_competition", performance_id)
+
+
+def upsert_market_competition(performance_id: int, **fields):
+    _upsert_one_to_one("market_competition", MARKET_COMPETITION_FIELDS, performance_id, **fields)

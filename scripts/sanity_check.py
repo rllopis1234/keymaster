@@ -1,11 +1,11 @@
 """No-API-key smoke test: inserts synthetic data through db.py and runs
-metrics.py against it, asserting the numbers come out sane. Run with:
+metrics.py (including the 5 confidence-score functions) against it, asserting
+the numbers come out sane. Run with:
 
     python scripts/sanity_check.py
 
-Safe to run repeatedly - it uses a throwaway talent name each run isn't
-required, but it will accumulate rows in the local dev DB. Delete
-data/talent_tracker.db to reset if desired.
+Safe to run repeatedly - uses clearly-named throwaway talent names each time
+and doesn't require cleanup between runs (rows just accumulate, harmlessly).
 """
 
 import sys
@@ -99,6 +99,45 @@ def main():
           fresh_revenue["ticket_price"] == metrics.GLOBAL_DEFAULT_TICKET_PRICE)
     check("falls back to global default sell-through with no history",
           fresh_revenue["sell_through_rate"] == metrics.GLOBAL_DEFAULT_SELL_THROUGH_RATE)
+
+    # Confidence scores - synthetic data through all 5 scoring functions
+    demand_score = metrics.score_demand({
+        "monthly_listeners": 850_000, "city_listeners": 12_000,
+        "playlist_reach": 3_000_000, "growth_6mo_pct": 8,
+    })
+    check("demand score is a number 0-100", demand_score["score"] is not None and 0 <= demand_score["score"] <= 100)
+    check("demand score with no data is None", metrics.score_demand({})["score"] is None)
+
+    marketing_score = metrics.score_marketing({
+        "instagram_followers": 150_000, "instagram_engagement_pct": 3.5,
+        "tiktok_followers": 500_000, "tiktok_viral_rate_pct": 5,
+        "youtube_subscribers": 200_000, "youtube_avg_views": 50_000,
+    })
+    check("marketing score is a number 0-100",
+          marketing_score["score"] is not None and 0 <= marketing_score["score"] <= 100)
+
+    financial_score_detailed = metrics.score_financial(
+        {"estimated_revenue": 63960.0}, {"total_expenses": 49000.0}, {"budget": 49000.0},
+        {"artist_guarantee": 20000, "venue_rental": 8000, "production_cost": 6000, "marketing_cost": 5000,
+         "security_cost": 3000, "insurance_cost": 2000, "travel_cost": 2500, "hotels_cost": 1500,
+         "crew_cost": 1000, "taxes_cost": 0},
+    )
+    profit_entry = next(b for b in financial_score_detailed["breakdown"] if b["label"] == "Profit ($)")
+    check("detailed financial profit matches worked example", profit_entry["raw_value"] == 14960.0)
+    check("detailed financial basis is correct", financial_score_detailed["basis"] == "detailed financial breakdown")
+
+    financial_score_fallback = metrics.score_financial(revenue_info, expense_info, performance, None)
+    check("fallback financial basis is correct", financial_score_fallback["basis"] == "simple budget-based estimate")
+
+    risk_score = metrics.score_risk(
+        {"other_concerts_count": 6, "weather_season_risk": "high"},
+        {"no_shows_count": 2, "venue_size_progression": "declining"},
+    )
+    check("risk score accumulates penalties correctly", risk_score["score"] == 100)
+    check("risk score with no data is None", metrics.score_risk(None, None)["score"] is None)
+
+    overall_score = metrics.score_overall(demand_score, marketing_score, financial_score_detailed, risk_score)
+    check("overall score is a number 0-100", overall_score["score"] is not None and 0 <= overall_score["score"] <= 100)
 
     print()
     if FAILURES:

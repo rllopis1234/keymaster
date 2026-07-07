@@ -111,15 +111,15 @@ def test_get_demand_metrics_returns_none_when_absent(fresh_db):
 def test_upsert_demand_metrics_inserts_then_updates(fresh_db):
     performance_id = _make_performance(fresh_db)
 
-    fresh_db.upsert_demand_metrics(performance_id, local_fan_density=42.0, fan_sentiment_score=80.0)
+    fresh_db.upsert_demand_metrics(performance_id, search_interest_index=42.0, fan_sentiment_score=80.0)
     row = fresh_db.get_demand_metrics(performance_id)
-    assert row["local_fan_density"] == 42.0
+    assert row["search_interest_index"] == 42.0
     assert row["fan_sentiment_score"] == 80.0
-    assert row["demand_growth_rate"] is None
+    assert row["ticket_conversion_rate"] is None
 
-    fresh_db.upsert_demand_metrics(performance_id, local_fan_density=99.0)
+    fresh_db.upsert_demand_metrics(performance_id, search_interest_index=99.0)
     row = fresh_db.get_demand_metrics(performance_id)
-    assert row["local_fan_density"] == 99.0
+    assert row["search_interest_index"] == 99.0
     assert row["fan_sentiment_score"] == 80.0  # untouched by the second call
 
 
@@ -127,3 +127,58 @@ def test_upsert_demand_metrics_rejects_unknown_field(fresh_db):
     performance_id = _make_performance(fresh_db)
     with pytest.raises(ValueError):
         fresh_db.upsert_demand_metrics(performance_id, not_a_real_field=1)
+
+
+def test_upsert_audience_metrics_inserts_then_updates(fresh_db):
+    performance_id = _make_performance(fresh_db)
+    fresh_db.upsert_audience_metrics(performance_id, monthly_listeners=850_000.0, instagram_followers=150_000.0)
+    row = fresh_db.get_audience_metrics(performance_id)
+    assert row["monthly_listeners"] == 850_000.0
+    assert row["instagram_followers"] == 150_000.0
+    assert row["tiktok_followers"] is None
+
+    fresh_db.upsert_audience_metrics(performance_id, monthly_listeners=900_000.0)
+    row = fresh_db.get_audience_metrics(performance_id)
+    assert row["monthly_listeners"] == 900_000.0
+    assert row["instagram_followers"] == 150_000.0
+
+
+def test_upsert_financial_details_inserts_then_updates(fresh_db):
+    performance_id = _make_performance(fresh_db)
+    fresh_db.upsert_financial_details(performance_id, artist_guarantee=20000.0, merch_revenue=1500.0)
+    row = fresh_db.get_financial_details(performance_id)
+    assert row["artist_guarantee"] == 20000.0
+    assert row["merch_revenue"] == 1500.0
+    assert row["venue_rental"] is None
+
+
+def test_upsert_touring_history_inserts_then_updates(fresh_db):
+    performance_id = _make_performance(fresh_db)
+    fresh_db.upsert_touring_history(
+        performance_id, sold_out_similar_venues=True, no_shows_count=0,
+        venue_size_progression="growing",
+    )
+    row = fresh_db.get_touring_history(performance_id)
+    assert row["sold_out_similar_venues"] is True
+    assert row["no_shows_count"] == 0
+    assert row["venue_size_progression"] == "growing"
+
+
+def test_upsert_market_competition_inserts_then_updates(fresh_db):
+    performance_id = _make_performance(fresh_db)
+    fresh_db.upsert_market_competition(
+        performance_id, other_concerts_count=2, weather_season_risk="medium",
+        major_holiday_conflict=False,
+    )
+    row = fresh_db.get_market_competition(performance_id)
+    assert row["other_concerts_count"] == 2
+    assert row["weather_season_risk"] == "medium"
+    assert row["major_holiday_conflict"] is False
+
+
+def test_new_detail_tables_return_none_when_absent(fresh_db):
+    performance_id = _make_performance(fresh_db)
+    assert fresh_db.get_audience_metrics(performance_id) is None
+    assert fresh_db.get_financial_details(performance_id) is None
+    assert fresh_db.get_touring_history(performance_id) is None
+    assert fresh_db.get_market_competition(performance_id) is None
