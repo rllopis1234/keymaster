@@ -51,6 +51,34 @@ def search_events(keyword: str, city: str | None = None, size: int = 20) -> list
     return simplified
 
 
+def search_attractions(keyword: str, limit: int = 8) -> list[str]:
+    """Candidate performer/attraction names for autocomplete."""
+    if not config.HAS_TICKETMASTER or not keyword:
+        return []
+    data = cached_get(
+        "ticketmaster", f"{BASE_URL}/attractions.json",
+        params={**_auth_params(), "keyword": keyword, "size": limit}, ttl_seconds=EVENTS_TTL,
+    )
+    if not data:
+        return []
+    attractions = data.get("_embedded", {}).get("attractions", [])
+    return [a["name"] for a in attractions[:limit] if a.get("name")]
+
+
+def search_venues(keyword: str, city: str | None = None, limit: int = 8) -> list[str]:
+    """Candidate venue names for autocomplete."""
+    if not config.HAS_TICKETMASTER or not keyword:
+        return []
+    params = {**_auth_params(), "keyword": keyword, "size": limit}
+    if city:
+        params["city"] = city
+    data = cached_get("ticketmaster", f"{BASE_URL}/venues.json", params=params, ttl_seconds=EVENTS_TTL)
+    if not data:
+        return []
+    venues = data.get("_embedded", {}).get("venues", [])
+    return [v["name"] for v in venues[:limit] if v.get("name")]
+
+
 def estimate_ticket_price_for_city(keyword: str, city: str) -> float | None:
     """Midpoint of price ranges across events matching this artist in this city,
     falling back to the artist's events anywhere if none found locally."""

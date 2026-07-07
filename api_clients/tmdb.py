@@ -50,6 +50,20 @@ def search_person(name: str) -> dict | None:
     return {"tmdb_id": top["id"], "name": top["name"], "popularity": top.get("popularity", 0)}
 
 
+def search_people(query: str, limit: int = 8) -> list[str]:
+    """Candidate person names for autocomplete (not just the single best match)."""
+    if not config.HAS_TMDB or not query:
+        return []
+    data = cached_get(
+        "tmdb", f"{BASE_URL}/search/person",
+        params={**_auth_params(), "query": query}, ttl_seconds=SEARCH_TTL,
+    )
+    if not data:
+        return []
+    results = sorted(data.get("results", []), key=lambda r: r.get("popularity", 0), reverse=True)
+    return [r["name"] for r in results[:limit]]
+
+
 def get_genres_for_person(tmdb_id: int, top_n: int = 5) -> list[str]:
     """Derives genre tags from the person's combined film/TV credits."""
     if not config.HAS_TMDB:

@@ -5,3 +5,4 @@ pandas
 altair
 pytest
 psycopg2-binary
+streamlit-keyup

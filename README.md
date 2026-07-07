@@ -103,6 +103,14 @@ Restart `streamlit run app.py` after editing `.env`.
    supports choosing this subdomain — it does not support pointing an
    externally-purchased domain at the app.
 
+## Autocomplete while entering a booking
+
+The talent name, city, and venue fields suggest matches as you type: first
+from your own database (previously entered talents/venues/cities, no network
+call), then — once you've typed a few characters — from live API search
+(MusicBrainz/Ticketmaster for music talent, TMDB for actors, Ticketmaster for
+venues) where those keys are configured. Click a suggestion to fill the field.
+
 ## How the numbers are computed
 
 - **Estimated revenue** = target capacity × sell-through rate × ticket price.

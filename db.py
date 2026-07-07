@@ -201,6 +201,53 @@ def list_talents() -> list:
         return cur.fetchall()
 
 
+def search_talent_names(domain: str, query: str, limit: int = 8) -> list[str]:
+    """Distinct talent names already in the DB (this domain) matching query."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT DISTINCT name FROM talents
+               WHERE domain = %s AND name ILIKE %s
+               ORDER BY name LIMIT %s""",
+            (domain, f"%{query}%", limit),
+        )
+        return [r["name"] for r in cur.fetchall()]
+
+
+def search_cities(query: str, limit: int = 8) -> list[str]:
+    """Distinct cities from past bookings/comps matching query."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT DISTINCT city FROM (
+                   SELECT city FROM performances WHERE city ILIKE %s
+                   UNION
+                   SELECT city FROM historical_comps WHERE city ILIKE %s
+               ) cities
+               WHERE city IS NOT NULL AND city != ''
+               ORDER BY city LIMIT %s""",
+            (f"%{query}%", f"%{query}%", limit),
+        )
+        return [r["city"] for r in cur.fetchall()]
+
+
+def search_venues(query: str, limit: int = 8) -> list[str]:
+    """Distinct venue names from past bookings/comps matching query."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT DISTINCT venue_name FROM (
+                   SELECT venue_name FROM performances WHERE venue_name ILIKE %s
+                   UNION
+                   SELECT venue_name FROM historical_comps WHERE venue_name ILIKE %s
+               ) venues
+               WHERE venue_name IS NOT NULL AND venue_name != ''
+               ORDER BY venue_name LIMIT %s""",
+            (f"%{query}%", f"%{query}%", limit),
+        )
+        return [r["venue_name"] for r in cur.fetchall()]
+
+
 # ---------------- performances ----------------
 
 def create_performance(talent_id: int, venue_name: str, city: str, estimated_date: str,

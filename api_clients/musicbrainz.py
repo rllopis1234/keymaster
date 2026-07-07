@@ -36,6 +36,20 @@ def get_genres(mbid: str, top_n: int = 5) -> list[str]:
     return [t["name"] for t in tags[:top_n]]
 
 
+def search_artists(query: str, limit: int = 8) -> list[str]:
+    """Candidate artist names for autocomplete (not just the single best match)."""
+    if not query:
+        return []
+    data = cached_get(
+        "musicbrainz", f"{BASE_URL}/artist/",
+        params={"query": query, "fmt": "json", "limit": limit},
+        headers=_HEADERS, ttl_seconds=TAGS_TTL,
+    )
+    if not data:
+        return []
+    return [a["name"] for a in data.get("artists", [])[:limit]]
+
+
 def enrich_music_artist(name: str) -> dict | None:
     mbid = search_artist_mbid(name)
     if not mbid:

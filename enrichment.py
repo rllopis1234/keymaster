@@ -48,6 +48,56 @@ def enrich_talent_if_needed(talent_row) -> dict:
     return talent
 
 
+MIN_QUERY_LENGTH_FOR_LIVE_LOOKUP = 3
+
+
+def _dedupe_preserve_order(names: list[str], limit: int) -> list[str]:
+    seen = set()
+    result = []
+    for name in names:
+        key = name.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            result.append(name)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def suggest_talent_names(domain: str, query: str, limit: int = 8) -> list[str]:
+    """Autocomplete candidates while typing a talent name: talents already in
+    the DB first (fast, no network), then live API results appended once the
+    query is long enough to keep external calls meaningful."""
+    if not query:
+        return []
+
+    candidates = list(db.search_talent_names(domain, query, limit=limit))
+
+    if len(query) >= MIN_QUERY_LENGTH_FOR_LIVE_LOOKUP:
+        if domain == "actor":
+            candidates += tmdb.search_people(query, limit=limit)
+        else:
+            candidates += musicbrainz.search_artists(query, limit=limit)
+            candidates += ticketmaster.search_attractions(query, limit=limit)
+
+    return _dedupe_preserve_order(candidates, limit)
+
+
+def suggest_venue_names(query: str, city: str = "", limit: int = 8) -> list[str]:
+    if not query:
+        return []
+    candidates = list(db.search_venues(query, limit=limit))
+    if len(query) >= MIN_QUERY_LENGTH_FOR_LIVE_LOOKUP:
+        candidates += ticketmaster.search_venues(query, city=city or None, limit=limit)
+    return _dedupe_preserve_order(candidates, limit)
+
+
+def suggest_city_names(query: str, limit: int = 8) -> list[str]:
+    if not query:
+        return []
+    return _dedupe_preserve_order(db.search_cities(query, limit=limit), limit)
+
+
 def get_live_context(talent_name: str, domain: str, city: str) -> dict:
     """Read-only supplementary data for the dashboard. Every key degrades to
     an empty/None value if the relevant API key is missing or the call

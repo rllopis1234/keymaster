@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from st_keyup import st_keyup
 
 import json
 
@@ -54,54 +55,86 @@ st.divider()
 
 # ---------------- pick or create a booking ----------------
 
-left, right = st.columns([2, 3])
+def _autocomplete_field(label: str, session_key: str, suggest_fn, field_prefix: str) -> str:
+    """A text field that suggests matches (from the DB and/or live APIs) as you
+    type, via suggest_fn(current_text) -> list[str]. Clicking a suggestion
+    fills the field. Lives outside any st.form so it can rerun on keystroke."""
+    st.session_state.setdefault(session_key, "")
+    value = st_keyup(label, value=st.session_state[session_key], debounce=300)
+    st.session_state[session_key] = value
+    if value:
+        suggestions = suggest_fn(value)
+        if suggestions:
+            with st.container(horizontal=True):
+                for suggestion in suggestions:
+                    if st.button(suggestion, key=f"{field_prefix}_{suggestion}"):
+                        st.session_state[session_key] = suggestion
+                        st.rerun()
+    return st.session_state[session_key]
 
-with left:
-    st.subheader("New booking")
-    with st.form("new_booking_form"):
-        talent_name = st.text_input("Talent name")
-        domain = st.radio("Domain", options=["music", "actor"], horizontal=True)
-        venue_name = st.text_input("Venue")
-        city = st.text_input("City")
-        estimated_date = st.date_input("Estimated date")
-        target_capacity = st.number_input("Target capacity", min_value=1, value=1000, step=50)
-        budget = st.number_input("Budget ($)", min_value=0.0, value=50000.0, step=1000.0)
 
-        with st.expander("Optional overrides"):
-            override_price = st.number_input(
-                "Assumed ticket price ($, leave 0 to auto-resolve)", min_value=0.0, value=0.0, step=1.0
-            )
-            override_rate = st.slider(
-                "Assumed sell-through rate (0 to auto-resolve)", min_value=0.0, max_value=1.0, value=0.0
-            )
-        notes = st.text_area("Notes", height=80)
+tab_new_booking, tab_history = st.tabs(["New booking", "History"])
 
-        submitted = st.form_submit_button("Save booking")
-        if submitted:
-            if not talent_name or not city:
-                st.error("Talent name and city are required.")
-            else:
-                talent = db.get_or_create_talent(talent_name, domain)
-                talent = enrichment.enrich_talent_if_needed(talent)
-                performance_id = db.create_performance(
-                    talent_id=talent["id"],
-                    venue_name=venue_name,
-                    city=city,
-                    estimated_date=str(estimated_date),
-                    target_capacity=int(target_capacity),
-                    budget=float(budget),
-                    assumed_ticket_price=override_price or None,
-                    assumed_sell_through_rate=override_rate or None,
-                    notes=notes,
+with tab_new_booking:
+    _, center, _ = st.columns([1, 2, 1])
+    with center:
+        domain = st.segmented_control(
+            "Domain", options=["music", "actor"], default="music", required=True, key="new_booking_domain"
+        )
+        talent_name = _autocomplete_field(
+            "Talent name", "new_talent_name",
+            lambda q: enrichment.suggest_talent_names(domain, q), "talent_sugg",
+        )
+        city = _autocomplete_field("City", "new_city", enrichment.suggest_city_names, "city_sugg")
+        venue_name = _autocomplete_field(
+            "Venue", "new_venue_name",
+            lambda q: enrichment.suggest_venue_names(q, city=city), "venue_sugg",
+        )
+
+        with st.form("new_booking_form"):
+            estimated_date = st.date_input("Estimated date")
+            target_capacity = st.number_input("Target capacity", min_value=1, value=1000, step=50)
+            budget = st.number_input("Budget ($)", min_value=0.0, value=50000.0, step=1000.0)
+
+            with st.expander("Optional overrides"):
+                override_price = st.number_input(
+                    "Assumed ticket price ($, leave 0 to auto-resolve)", min_value=0.0, value=0.0, step=1.0
                 )
-                st.session_state["selected_performance_id"] = performance_id
-                st.success(f"Saved booking for {talent_name} in {city}.")
+                override_rate = st.slider(
+                    "Assumed sell-through rate (0 to auto-resolve)", min_value=0.0, max_value=1.0, value=0.0
+                )
+            notes = st.text_area("Notes", height=80)
 
-with right:
+            submitted = st.form_submit_button("Save booking")
+            if submitted:
+                if not talent_name or not city:
+                    st.error("Talent name and city are required.")
+                else:
+                    talent = db.get_or_create_talent(talent_name, domain)
+                    talent = enrichment.enrich_talent_if_needed(talent)
+                    performance_id = db.create_performance(
+                        talent_id=talent["id"],
+                        venue_name=venue_name,
+                        city=city,
+                        estimated_date=str(estimated_date),
+                        target_capacity=int(target_capacity),
+                        budget=float(budget),
+                        assumed_ticket_price=override_price or None,
+                        assumed_sell_through_rate=override_rate or None,
+                        notes=notes,
+                    )
+                    st.session_state["selected_performance_id"] = performance_id
+                    st.session_state["new_talent_name"] = ""
+                    st.session_state["new_city"] = ""
+                    st.session_state["new_venue_name"] = ""
+                    st.success(f"Saved booking for {talent_name} in {city}.")
+                    st.rerun()
+
+with tab_history:
     st.subheader("Existing bookings")
     all_performances = db.list_all_performances()
     if not all_performances:
-        st.write("No bookings saved yet. Create one on the left to get started.")
+        st.write("No bookings saved yet. Create one under \"New booking\" to get started.")
     else:
         options = {
             f"#{p['id']} — {p['talent_name']} @ {p['venue_name'] or p['city']} ({p['city']}, {p['estimated_date']})": p["id"]
@@ -229,7 +262,7 @@ with st.expander("Manually-entered demand metrics", expanded=not demand):
                 "Local fan density (followers per 100k residents)", min_value=0.0,
                 value=float(demand.get("local_fan_density") or 0.0), step=1.0)
             search_interest_index = st.number_input(
-                "Search interest index (Google Trends score, last 90-180 days)", min_value=0.0,
+                "Search interest / SEO score (Google Trends, last 90-180 days)", min_value=0.0,
                 value=float(demand.get("search_interest_index") or 0.0), step=1.0)
             social_engagement_rate = st.number_input(
                 "Social engagement rate (%) — (likes+comments+shares) ÷ followers", min_value=0.0,
@@ -286,7 +319,7 @@ if demand:
     st.markdown("**Saved demand metrics**")
     labels = {
         "local_fan_density": "Local fan density (per 100k residents)",
-        "search_interest_index": "Search interest index",
+        "search_interest_index": "Search interest / SEO score",
         "social_engagement_rate": "Social engagement rate (%)",
         "streaming_popularity": "Streaming popularity (monthly listeners)",
         "ticket_conversion_rate": "Ticket conversion rate (%)",

@@ -25,6 +25,45 @@ def test_get_or_create_talent_distinguishes_by_domain(fresh_db):
     assert music["id"] != actor["id"]
 
 
+def test_search_talent_names_matches_substring_and_domain(fresh_db):
+    fresh_db.get_or_create_talent("Radiohead", "music")
+    fresh_db.get_or_create_talent("Radiohead", "actor")  # different domain, shouldn't match
+    fresh_db.get_or_create_talent("Coldplay", "music")
+
+    results = fresh_db.search_talent_names("music", "radio")
+    assert results == ["Radiohead"]
+
+
+def test_search_cities_matches_across_performances_and_comps(fresh_db):
+    talent = fresh_db.get_or_create_talent("Artist C", "music")
+    fresh_db.create_performance(
+        talent_id=talent["id"], venue_name="V", city="Austin",
+        estimated_date="2026-01-01", target_capacity=100, budget=1000.0,
+    )
+    fresh_db.create_historical_comp(
+        comparable_name="Artist C", domain="music", is_self=True, talent_id=talent["id"],
+        venue_name="V", city="Austinburg", event_date="2024-01-01",
+    )
+    results = fresh_db.search_cities("austin")
+    assert set(results) == {"Austin", "Austinburg"}
+
+
+def test_search_venues_matches_across_performances_and_comps(fresh_db):
+    talent = fresh_db.get_or_create_talent("Artist D", "music")
+    fresh_db.create_performance(
+        talent_id=talent["id"], venue_name="The Arena", city="Denver",
+        estimated_date="2026-01-01", target_capacity=100, budget=1000.0,
+    )
+    results = fresh_db.search_venues("arena")
+    assert results == ["The Arena"]
+
+
+def test_search_functions_return_empty_list_when_no_match(fresh_db):
+    assert fresh_db.search_talent_names("music", "zzz_nonexistent") == []
+    assert fresh_db.search_cities("zzz_nonexistent") == []
+    assert fresh_db.search_venues("zzz_nonexistent") == []
+
+
 def test_historical_comp_filters_by_self_and_domain(fresh_db):
     talent = fresh_db.get_or_create_talent("Artist A", "music")
     fresh_db.create_historical_comp(
