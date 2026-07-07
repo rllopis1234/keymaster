@@ -11,7 +11,7 @@ import db
 import enrichment
 import metrics
 
-LOGO_PATH = Path(__file__).parent / "assets" / "logo.jpg"
+LOGO_PATH = Path(__file__).parent / "assets" / "logo.png"
 
 st.set_page_config(page_title="Keymaster", page_icon=str(LOGO_PATH), layout="wide")
 
