@@ -155,6 +155,15 @@ in the "Live external data" expander as supplementary context, and never
 silently overrides your historical/manual numbers except for the one
 documented Ticketmaster ticket-price fallback above.
 
+## Exporting a booking to Excel
+
+Every booking's dashboard has a "Download booking report (.xlsx)" button
+that saves everything on that page — inputs (talent, venue, city, date,
+capacity, budget, notes) and outputs (revenue/expense estimates, venue fit
+score, marketing efficiency, demand metrics, similar-talent comparison,
+historical performance) — into a single spreadsheet with one sheet per
+section.
+
 ## Project layout
 
 ```
@@ -163,6 +172,7 @@ db.py             Postgres schema + CRUD
 models.py         Dataclasses mirroring the schema
 metrics.py        Revenue/expense/similarity formulas (no network access)
 enrichment.py     Bridges api_clients/* into db.py + supplies live context
+export.py         Builds the per-booking Excel workbook (inputs + outputs)
 config.py         .env/secrets loading, API-key + DB + password presence flags
 api_clients/      One module per external API, each fails soft (returns
                   None/[] rather than raising) when unavailable

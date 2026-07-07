@@ -10,6 +10,7 @@ import json
 import config
 import db
 import enrichment
+import export
 import metrics
 
 LOGO_PATH = Path(__file__).parent / "assets" / "logo.png"
@@ -378,6 +379,20 @@ with hc2:
         st.dataframe(pd.DataFrame(summary["elsewhere"]), hide_index=True, use_container_width=True)
     else:
         st.write("No records elsewhere yet.")
+
+# ---------------- export ----------------
+
+workbook_bytes = export.build_booking_workbook(
+    talent=talent, performance=performance, revenue_info=revenue_info, expense_info=expense_info,
+    net_margin=net_margin, venue_fit_score=vfs, marketing_efficiency=mkt_efficiency,
+    demand=demand, merch_per_attendee=merch_per_attendee, similar=similar, historical_summary=summary,
+)
+st.download_button(
+    "Download booking report (.xlsx)",
+    data=workbook_bytes,
+    file_name=f"keymaster_{talent_name.replace(' ', '_')}_{performance['city'].replace(' ', '_')}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
 
 # ---------------- live external data (supplementary, not used in the core math above) ----------------
 
