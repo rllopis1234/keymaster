@@ -60,7 +60,7 @@ def _autocomplete_field(label: str, session_key: str, suggest_fn, field_prefix: 
     type, via suggest_fn(current_text) -> list[str]. Clicking a suggestion
     fills the field. Lives outside any st.form so it can rerun on keystroke."""
     st.session_state.setdefault(session_key, "")
-    value = st_keyup(label, value=st.session_state[session_key], debounce=300)
+    value = st_keyup(label, value=st.session_state[session_key], debounce=300, key=f"{field_prefix}_keyup")
     st.session_state[session_key] = value
     if value:
         suggestions = suggest_fn(value)
